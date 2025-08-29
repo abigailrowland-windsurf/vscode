@@ -1721,4 +1721,45 @@ suite('ExtensionsWorkbenchServiceTest', () => {
 			async resetPinnedStateForAllUserExtensions(pinned: boolean) { }
 		};
 	}
+
+	test('test update extension fails when dependency version conflicts with other extensions', async () => {
+		const extensionA = aLocalExtension('a', { extensionDependencies: ['pub.b'] });
+		const extensionB_v1 = aLocalExtension('b', { version: '1.0.0' });
+		const extensionC = aLocalExtension('c', { extensionDependencies: ['pub.b@^2.0.0'] });
+
+		const extensionB_v2_gallery = aGalleryExtension('b', { version: '2.0.0' });
+
+		instantiationService.stub(INotificationService, {
+			prompt(severity, message, choices, options) {
+				if (options && options.onCancel) {
+					options.onCancel();
+				}
+				return null!;
+			}
+		});
+
+		return instantiationService.get(IWorkbenchExtensionEnablementService).setEnablement([extensionA], EnablementState.EnabledGlobally)
+			.then(() => instantiationService.get(IWorkbenchExtensionEnablementService).setEnablement([extensionB_v1], EnablementState.EnabledGlobally))
+			.then(() => instantiationService.get(IWorkbenchExtensionEnablementService).setEnablement([extensionC], EnablementState.EnabledGlobally))
+			.then(async () => {
+				instantiationService.stubPromise(IExtensionManagementService, 'getInstalled', [extensionA, extensionB_v1, extensionC]);
+				instantiationService.stubPromise(IExtensionGalleryService, 'query', aPage(extensionB_v2_gallery));
+				testObject = await aWorkbenchService();
+
+				const extensionB_extension = testObject.local.find(e => e.identifier.id === 'pub.b');
+				assert.ok(extensionB_extension, 'Extension B should be found in local extensions');
+
+				extensionB_extension.gallery = extensionB_v2_gallery;
+
+				try {
+					await testObject.install(extensionB_extension);
+					assert.fail('Update should be blocked due to version conflict');
+				} catch (error) {
+					assert.ok(error, 'Update was correctly blocked with error');
+				}
+
+				assert.strictEqual(testObject.local.find(e => e.identifier.id === 'pub.b')?.version, '1.0.0',
+					'Extension B should remain at v1.0.0');
+			});
+	});
 });
